@@ -1,10 +1,12 @@
+// TODO: fix finished job notifs so that they don't get put ont he line that is currently being typed
+
 extern crate dirs;
 extern crate nix;
 
 use std::path::{Path};
 use std::{env, thread};
 use std::fs::File;
-use std::io::{stdin, stdout, Write, BufRead, BufReader, Read};
+use std::io::{stdin, stdout, Write, Read};
 use std::process::{Child, Command};
 use std::sync::{Arc, Mutex};
 use ansi_term::{Color, Style};
@@ -45,32 +47,19 @@ impl HistoryStruct {
     }
 }
 
-// struct JobStruct {
-//     jobs: Vec<String>,
-//     job_status: Vec<bool>,
-//     job_ids: Vec<u32>,
-//     job_processes: Vec<Child>,
-//     current_id: u32,
-// }
-
 struct JobStruct {
     status: bool,
+    command: String,
     id: u32,
     process: Child,
 }
 
 impl JobStruct {
-    fn new(child: Child) -> Self {
-        // JobStruct {
-        //     jobs: Vec::new(),
-        //     job_status: Vec::new(),
-        //     job_ids: Vec::new(),
-        //     job_processes: Vec::new(),
-        //     current_id: 1,
-        // }
+    fn new(command: String, child: Child, current_job_id: u32) -> Self {
         JobStruct {
+            id: current_job_id,
+            command,
             status: true,
-            id: 0,
             process: child,
         }
     }
@@ -119,9 +108,9 @@ impl SettingsStruct {
 
 struct ShellStruct {
     history_struct: HistoryStruct,
-    //job_struct: JobStruct,
     jobs: Vec<JobStruct>,
     settings_struct: SettingsStruct,
+    current_job_id: u32,
 }
 
 impl ShellStruct {
@@ -130,11 +119,13 @@ impl ShellStruct {
             history_struct: HistoryStruct::new(),
             jobs: Vec::new(),
             settings_struct: SettingsStruct::new(),
+            current_job_id: 0,
         }
     }
 
-    fn add_job(&self) {
-
+    fn add_job(&mut self, command: String, child: Child) {
+        self.jobs.push(JobStruct::new(command, child, self.current_job_id));
+        self.current_job_id += 1;
     }
 
     fn print_jobs(&self) {
@@ -145,21 +136,18 @@ impl ShellStruct {
     }
 
     fn update_jobs(&mut self) {
-        for (i, job) in self.jobs.iter_mut().enumerate() {
-            match job.process.try_wait() {
-                Ok(Some(exit_status)) => {
-                    self.jobs.remove(i);
-
-                    // if job.len()-1 == self.current_id as usize {
-                    //     // decrease if most recent process run
-                    //     self.current_id-=1;
-                    // }
+        //self.jobs.retain_mut(|job| !matches!(job.process.try_wait(), Ok(Some(_))));
+        self.jobs.retain_mut(
+            |job|
+                match job.process.try_wait() {
+                    Ok(Some(_)) => {
+                        println!("Done!");
+                        false
+                    },
+                    _ => true,
                 }
-                _ => {},
-            }
-        }
+        );
     }
-
 }
 
 
@@ -176,11 +164,11 @@ fn main() {
     let jobs_thread = thread::spawn(move || {
         loop {
             let mut lock = thread_shell_struct.lock().unwrap();
-            lock.job_struct.update_jobs();
+            lock.update_jobs();
         }
+
     });
 
-    let mut shell_lock = shell_struct.lock().unwrap();
     loop {
         print_pwd();
 
@@ -192,7 +180,7 @@ fn main() {
 
         if input == "" { continue; }
 
-        shell_lock.history_struct.add_to_history(&input);
+        shell_struct.lock().unwrap().history_struct.add_to_history(&input);
 
         let mut tokens: Vec<&str> = input.split(" ").collect();
         tokens.retain(|&char| char != "");  // get rid of extra spaces
@@ -212,7 +200,7 @@ fn main() {
             tokens_part.remove(0);  // remove the command from the tokens vec
 
             // run command and check if it exists, continue if true
-            let result: bool = execmd(&shell_lock, &command, &tokens_part);
+            let result: bool = execmd(&shell_struct.lock().unwrap(), &command, &tokens_part);
             if result { continue }
 
             // fork and run
@@ -243,7 +231,7 @@ fn main() {
                         }
                     } else {
                         tokens_part.insert(0, command.as_str());
-                        shell_lock.job_struct.add_job(
+                        shell_struct.lock().unwrap().add_job(
                             tokens_part.join(" "), cmd.unwrap()
                         );
                     }
@@ -271,7 +259,7 @@ fn execmd(shell_struct: &ShellStruct, command: &String, args: &Vec<&str>) -> boo
         "cd"      => cd(args),
         "cat"     => cat(args),
         "history" => shell_struct.history_struct.print_history(),
-        "jobs"    => shell_struct.job_struct.print_jobs(),
+        "jobs"    => shell_struct.print_jobs(),
         _         => return false,
     };
     return true

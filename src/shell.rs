@@ -1,10 +1,12 @@
 extern crate dirs;
+extern crate nix;
 
 use std::path::{Path};
-use std::env;
+use std::{env, thread};
 use std::fs::File;
 use std::io::{stdin, stdout, Write, BufRead, BufReader, Read};
-use std::process::{Command};
+use std::process::{Child, Command};
+use std::sync::{Arc, Mutex};
 use ansi_term::{Color, Style};
 
 // Global Constants
@@ -43,20 +45,49 @@ impl HistoryStruct {
     }
 }
 
+// struct JobStruct {
+//     jobs: Vec<String>,
+//     job_status: Vec<bool>,
+//     job_ids: Vec<u32>,
+//     job_processes: Vec<Child>,
+//     current_id: u32,
+// }
+
 struct JobStruct {
-    jobs: [String; MAX_JOBS],
-    job_ids: [i32; MAX_JOBS],
-    job_pids: [i32; MAX_JOBS],
-    current_job_id: i32,
+    status: bool,
+    id: u32,
+    process: Child,
 }
 
 impl JobStruct {
-    fn new() -> Self {
+    fn new(child: Child) -> Self {
+        // JobStruct {
+        //     jobs: Vec::new(),
+        //     job_status: Vec::new(),
+        //     job_ids: Vec::new(),
+        //     job_processes: Vec::new(),
+        //     current_id: 1,
+        // }
         JobStruct {
-            jobs: std::array::from_fn(|_| String::new()),
-            job_ids: std::array::from_fn(|_| -1),
-            job_pids: std::array::from_fn(|_| -1),
-            current_job_id: 0,
+            status: true,
+            id: 0,
+            process: child,
+        }
+    }
+
+    // fn add_job(&mut self, job: String, child: Child) {
+    //     self.jobs.push(job);
+    //     self.job_status.push(true);
+    //     self.job_ids.push(self.current_id);
+    //     self.job_processes.push(child);
+    //     self.current_id+=1;
+    // }
+
+    fn get_status(status: bool) -> String {
+        if status {
+            String::from("running")
+        } else {
+            String::from("stopped")
         }
     }
 }
@@ -88,7 +119,8 @@ impl SettingsStruct {
 
 struct ShellStruct {
     history_struct: HistoryStruct,
-    job_struct: JobStruct,
+    //job_struct: JobStruct,
+    jobs: Vec<JobStruct>,
     settings_struct: SettingsStruct,
 }
 
@@ -96,21 +128,59 @@ impl ShellStruct {
     fn new() -> Self {
         ShellStruct {
             history_struct: HistoryStruct::new(),
-            job_struct: JobStruct::new(),
+            jobs: Vec::new(),
             settings_struct: SettingsStruct::new(),
         }
     }
+
+    fn add_job(&self) {
+
+    }
+
+    fn print_jobs(&self) {
+        for (i, job) in self.jobs.iter().enumerate() {
+            let status: String = JobStruct::get_status(job.status);
+            println!("[{}]  {}", job.id, status);
+        }
+    }
+
+    fn update_jobs(&mut self) {
+        for (i, job) in self.jobs.iter_mut().enumerate() {
+            match job.process.try_wait() {
+                Ok(Some(exit_status)) => {
+                    self.jobs.remove(i);
+
+                    // if job.len()-1 == self.current_id as usize {
+                    //     // decrease if most recent process run
+                    //     self.current_id-=1;
+                    // }
+                }
+                _ => {},
+            }
+        }
+    }
+
 }
 
 
 fn main() {
     println!("Shell!");
 
-    let mut shell_struct: ShellStruct = ShellStruct::new();
+    let mut shell_struct = Arc::new(Mutex::new(ShellStruct::new()));
 
     let home_dir = dirs::home_dir().unwrap();
     let _=env::set_current_dir(&home_dir.as_path());
 
+    // check and update jobs in its own thread
+    let thread_shell_struct = Arc::clone(&shell_struct);
+    let jobs_thread = thread::spawn(move || {
+        loop {
+            let mut lock = thread_shell_struct.lock().unwrap();
+            lock.job_struct.update_jobs();
+        }
+    });
+
+    let mut shell_lock = shell_struct.lock().unwrap();
     loop {
         print_pwd();
 
@@ -122,7 +192,7 @@ fn main() {
 
         if input == "" { continue; }
 
-        shell_struct.history_struct.add_to_history(&input);
+        shell_lock.history_struct.add_to_history(&input);
 
         let mut tokens: Vec<&str> = input.split(" ").collect();
         tokens.retain(|&char| char != "");  // get rid of extra spaces
@@ -130,31 +200,54 @@ fn main() {
         while !tokens.is_empty() {  // loop while && or || still exists
             let (mut tokens_part, separator) = split_input(&mut tokens);
 
+            let ampersand: bool;
+            if tokens_part[tokens_part.len()-1] == "&" {
+                ampersand = true;
+                tokens_part.remove(tokens_part.len()-1);
+            } else {
+                ampersand = false;
+            }
+
             let command: String = tokens_part[0].to_lowercase();
             tokens_part.remove(0);  // remove the command from the tokens vec
 
             // run command and check if it exists, continue if true
-            let result: bool = execmd(&shell_struct, &command, &tokens_part);
+            let result: bool = execmd(&shell_lock, &command, &tokens_part);
             if result { continue }
 
             // fork and run
-            let mut cmd = Command::new(command.as_str()).args(&tokens_part).status();
+            let mut cmd = Command::new(command.as_str()).args(&tokens_part).spawn();
             match cmd {
-                Ok(res) => {
-                    if separator.is_some() {
-                        let separator_copy = separator.unwrap().clone();
-                        if separator_copy == "||" {
-                            if cmd.unwrap().success() {
-                                break;
+                Ok(ref mut child) => {
+                    if !ampersand {
+                        match child.wait() {
+                            Ok(exit_status) => {
+                                if separator.is_some() {
+                                    let separator_copy = separator.unwrap().clone();
+                                    if separator_copy == "||" {
+                                        if exit_status.success() {
+                                            break;
+                                        }
+                                    } else if separator_copy == "&&" {
+                                        if exit_status.success() {
+                                            continue;
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                }
                             }
-                        } else if separator_copy == "&&" {
-                            if cmd.unwrap().success() {
-                                continue;
-                            } else {
-                                break;
+                            Err(e) => {
+                                println!("Some child error")
                             }
                         }
+                    } else {
+                        tokens_part.insert(0, command.as_str());
+                        shell_lock.job_struct.add_job(
+                            tokens_part.join(" "), cmd.unwrap()
+                        );
                     }
+
                 },
                 Err(_) => {
                     println!("Command {command} not recognized");
@@ -178,12 +271,13 @@ fn execmd(shell_struct: &ShellStruct, command: &String, args: &Vec<&str>) -> boo
         "cd"      => cd(args),
         "cat"     => cat(args),
         "history" => shell_struct.history_struct.print_history(),
+        "jobs"    => shell_struct.job_struct.print_jobs(),
         _         => return false,
     };
     return true
 }
 
-fn get_pwd() -> String{
+fn get_pwd() -> String {
     env::current_dir().unwrap().into_os_string().into_string().unwrap()
 }
 fn print_pwd() {

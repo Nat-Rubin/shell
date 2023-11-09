@@ -13,7 +13,6 @@ use ansi_term::{Color, Style};
 
 // Global Constants
 const MAX_HISTORY:usize = 10;
-const MAX_JOBS:usize = 255;
 
 struct HistoryStruct {
     history: [String; MAX_HISTORY],
@@ -119,17 +118,19 @@ impl ShellStruct {
             history_struct: HistoryStruct::new(),
             jobs: Vec::new(),
             settings_struct: SettingsStruct::new(),
-            current_job_id: 0,
+            current_job_id: 1,
         }
     }
 
     fn add_job(&mut self, command: String, child: Child) {
-        self.jobs.push(JobStruct::new(command, child, self.current_job_id));
+        let new_job = JobStruct::new(command, child, self.current_job_id);
         self.current_job_id += 1;
+        println!("[{}]  {}", new_job.id, new_job.process.id());
+        self.jobs.push(new_job);
     }
 
     fn print_jobs(&self) {
-        for (i, job) in self.jobs.iter().enumerate() {
+        for job in self.jobs.iter() {
             let status: String = JobStruct::get_status(job.status);
             println!("[{}]  {}", job.id, status);
         }
@@ -141,7 +142,7 @@ impl ShellStruct {
             |job|
                 match job.process.try_wait() {
                     Ok(Some(_)) => {
-                        println!("Done!");
+                        println!("[{}]  {}  done    {}", job.id, job.process.id(), job.command);
                         false
                     },
                     _ => true,
@@ -154,14 +155,14 @@ impl ShellStruct {
 fn main() {
     println!("Shell!");
 
-    let mut shell_struct = Arc::new(Mutex::new(ShellStruct::new()));
+    let shell_struct = Arc::new(Mutex::new(ShellStruct::new()));
 
     let home_dir = dirs::home_dir().unwrap();
     let _=env::set_current_dir(&home_dir.as_path());
 
     // check and update jobs in its own thread
     let thread_shell_struct = Arc::clone(&shell_struct);
-    let jobs_thread = thread::spawn(move || {
+    let _jobs_thread = thread::spawn(move || {
         loop {
             let mut lock = thread_shell_struct.lock().unwrap();
             lock.update_jobs();
@@ -226,7 +227,7 @@ fn main() {
                                 }
                             }
                             Err(e) => {
-                                println!("Some child error")
+                                println!("Some child error of {e}")
                             }
                         }
                     } else {
@@ -289,7 +290,7 @@ fn cd(args: &Vec<&str>) {
 
     match dir_set_result {
         Ok(dir) => dir,
-        Err(err) => {
+        Err(_err) => {
             println!("cd: no such file or directory");
             return
         },
@@ -342,7 +343,7 @@ fn split_input<'a>(tokens: &'a mut Vec<&str>) -> (Vec<&'a str>, Option<String>) 
         }
         part.push(*token);
     }
-    for i in 0..part_index {
+    for _ in 0..part_index {
         tokens.remove(0);
     }
     return (part, separator);

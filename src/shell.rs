@@ -63,14 +63,6 @@ impl JobStruct {
         }
     }
 
-    // fn add_job(&mut self, job: String, child: Child) {
-    //     self.jobs.push(job);
-    //     self.job_status.push(true);
-    //     self.job_ids.push(self.current_id);
-    //     self.job_processes.push(child);
-    //     self.current_id+=1;
-    // }
-
     fn get_status(status: bool) -> String {
         if status {
             String::from("running")

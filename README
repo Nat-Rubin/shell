@@ -1,0 +1,6 @@
+This is a simple shell written completely in rust. It has a few basic built in commands and is not very complex.
+Custom Commands:
+cd
+cat
+history
+jobs

@@ -1,7 +1,8 @@
-// TODO: fix finished job notifs so that they don't get put ont he line that is currently being typed
+// TODO: fix finished job notifs so that they don't get put on the line that is currently being typed
+// TODO: allow use of up arrow to copy previous commands
+// TODO: update settings structs
 
 extern crate dirs;
-extern crate nix;
 
 use std::path::{Path};
 use std::{env, thread};

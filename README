@@ -1,4 +1,6 @@
-This is a simple shell written completely in rust. It has a few basic built in commands and is not very complex.
+This is a simple shell written completely in rust.
+Runs on Unix systems (MacOS, Linux)
+It has a few basic built in commands and is not very complex.
 Custom Commands:
 cd
 cat
